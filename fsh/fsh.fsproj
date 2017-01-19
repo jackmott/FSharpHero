@@ -48,7 +48,8 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="sdl_fsh.fs" />
+    <Compile Include="handmade.fs" />
+    <Compile Include="sdl_handmade.fs" />
     <None Include="App.config" />
     <None Include="SDL2.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

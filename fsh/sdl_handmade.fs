@@ -1,6 +1,6 @@
 ﻿namespace FSharpHero
 
-module SDL_FSH =
+module SDL_Handmade =
 
     open SDL2
     open System.Runtime.InteropServices
@@ -60,15 +60,10 @@ module SDL_FSH =
             Height : int
         }
 
-    let GetWindowSize (window : SDL_Window) = 
-        let mutable w = 0
-        let mutable h = 0
-        SDL.SDL_GetWindowSize(window,&w,&h)
-        {
-            Width = w
-            Height = h
-        }
-   
+    let GetWindowSize (window : SDL_Window) =     
+        match SDL.SDL_GetWindowSize(window) with
+        | (w,h) -> {Width = w; Height = h }
+        
 
     let FillSoundBuffer (soundOutput : SDL_SoundOutput) (byteToLock : int) (bytesToWrite : int) =
         let sampleCount = bytesToWrite / soundOutput.BytesPerSample
@@ -120,8 +115,7 @@ module SDL_FSH =
         buffer.Texture <- SDL.SDL_CreateTexture(renderer,
                                                 SDL.SDL_PIXELFORMAT_ARGB8888,
                                                 (int)SDL.SDL_TextureAccess.SDL_TEXTUREACCESS_STREAMING,
-                                                w,h)
-        printfn "%A" (SDL.SDL_GetError())
+                                                w,h)        
         buffer.Width <- w
         buffer.Height <- h
         buffer.Pitch <- 4*w
