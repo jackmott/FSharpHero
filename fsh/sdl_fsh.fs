@@ -56,6 +56,21 @@ module SDL_FSH =
             Height = h
         }
 
+    let AudioCallback (userData:IntPtr) (stream:IntPtr) (len:int) =
+        ()   
+
+    let InitAudio (samplesPerSecond:int32) (bufferSize:uint16) =
+        let mutable audioSettings = SDL.SDL_AudioSpec()
+        audioSettings.freq <- samplesPerSecond
+        audioSettings.format <- SDL.AUDIO_S16LSB
+        audioSettings.channels <- 2uy
+        audioSettings.samples <- bufferSize
+        audioSettings.callback <- SDL.SDL_AudioCallback(AudioCallback)
+
+        let mutable obtainedAudioSettings = SDL.SDL_AudioSpec()
+        if SDL.SDL_OpenAudio(ref audioSettings,ref obtainedAudioSettings) <> 0 then
+            printfn "Audio Error"
+        SDL.SDL_PauseAudio(0)
     
     let RenderWeirdGradient (buffer:SDL_OffscreenBuffer) (bOffset:int32) (gOffset:int32) =        
         let mutable row = 0
@@ -177,11 +192,16 @@ module SDL_FSH =
     [<EntryPoint>]
     let main argv = 
         SDL.SDL_SetHint(SDL.SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING, "1") |> ignore
-        if SDL.SDL_Init(SDL.SDL_INIT_VIDEO ||| SDL.SDL_INIT_GAMECONTROLLER ||| SDL.SDL_INIT_HAPTIC) <> 0 then
+        if SDL.SDL_Init(SDL.SDL_INIT_VIDEO ||| 
+                        SDL.SDL_INIT_GAMECONTROLLER ||| 
+                        SDL.SDL_INIT_HAPTIC ||| 
+                        SDL.SDL_INIT_AUDIO) <> 0 then
+
             printfn "error on init"
         else            
             printfn "success"
             OpenGameControllers ()
+            InitAudio 48000 4096us
             let window =
                 SDL.SDL_CreateWindow("FSharp Hero",
                                      100,100,1920,1200,
