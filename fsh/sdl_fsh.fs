@@ -10,6 +10,18 @@ module SDL_FSH =
     type SDL_Texture = nativeint
     type SDL_Window = nativeint
     type SDL_Renderer = nativeint
+    type SDL_GameController = nativeint
+    type SDL_Haptic = nativeint
+
+    let MAX_CONTROLLERS = 4
+    type Controller =
+      {
+        Controller : SDL_GameController
+        Rumbler : SDL_Haptic
+      }
+
+    let Controllers = ResizeArray<Controller>(1)
+    
 
     type SDL_OffscreenBuffer = 
         {
@@ -94,6 +106,32 @@ module SDL_FSH =
         | SDL.SDL_EventType.SDL_QUIT  
             -> printfn "Quit Event"
                true
+        | SDL.SDL_EventType.SDL_KEYDOWN
+        | SDL.SDL_EventType.SDL_KEYUP
+            -> let keyCode = event.key.keysym.sym
+               let isDown = event.key.state = SDL.SDL_PRESSED
+               let wasDown = 
+                    if event.key.state = SDL.SDL_RELEASED || event.key.repeat <> 0uy then
+                        true
+                    else
+                        false
+               if event.key.repeat = 0uy then
+                   match keyCode with
+                   | SDL.SDL_Keycode.SDLK_w -> ()
+                   | SDL.SDL_Keycode.SDLK_a -> ()
+                   | SDL.SDL_Keycode.SDLK_s -> ()
+                   | SDL.SDL_Keycode.SDLK_d -> ()
+                   | SDL.SDL_Keycode.SDLK_q -> ()
+                   | SDL.SDL_Keycode.SDLK_e -> ()
+                   | SDL.SDL_Keycode.SDLK_UP -> ()
+                   | SDL.SDL_Keycode.SDLK_LEFT -> ()
+                   | SDL.SDL_Keycode.SDLK_DOWN -> ()
+                   | SDL.SDL_Keycode.SDLK_RIGHT -> ()
+                   | SDL.SDL_Keycode.SDLK_ESCAPE -> ()
+                   | SDL.SDL_Keycode.SDLK_SPACE -> ()
+                   | _ -> ()
+               false
+
         | SDL.SDL_EventType.SDL_WINDOWEVENT 
             -> printfn "Window Event"
                match event.window.windowEvent with
@@ -110,17 +148,44 @@ module SDL_FSH =
         | _ -> false
 
 
+    let OpenGameControllers () = 
+        let maxJoysticks = Math.Min(SDL.SDL_NumJoysticks(), MAX_CONTROLLERS)
+        for i in 0 .. maxJoysticks-1 do
+            if SDL.SDL_IsGameController(i) = SDL.SDL_bool.SDL_TRUE then
+                let controller = SDL.SDL_GameControllerOpen(i)
+                let rumble = SDL.SDL_HapticOpen(i)
+                if SDL.SDL_HapticRumbleInit(rumble) <> 0 then
+                    SDL.SDL_HapticClose(rumble)
+                    Controllers.Add( 
+                        {
+                            Controller = controller
+                            Rumbler = IntPtr.Zero
+                        })
+                else
+                    Controllers.Add(
+                        {
+                            Controller = controller
+                            Rumbler = rumble
+                        })
+
+
+    let CloseGameControllers () =
+        for controller in Controllers do
+            SDL.SDL_GameControllerClose(controller.Controller)
+            SDL.SDL_HapticClose(controller.Rumbler)        
+            
     [<EntryPoint>]
     let main argv = 
-   
-        if SDL.SDL_Init(SDL.SDL_INIT_VIDEO) <> 0 then
+        SDL.SDL_SetHint(SDL.SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING, "1") |> ignore
+        if SDL.SDL_Init(SDL.SDL_INIT_VIDEO ||| SDL.SDL_INIT_GAMECONTROLLER ||| SDL.SDL_INIT_HAPTIC) <> 0 then
             printfn "error on init"
-        else
+        else            
             printfn "success"
+            OpenGameControllers ()
             let window =
                 SDL.SDL_CreateWindow("FSharp Hero",
-                                        100,100,1920,1200,
-                                        SDL.SDL_WindowFlags.SDL_WINDOW_RESIZABLE)
+                                     100,100,1920,1200,
+                                     SDL.SDL_WindowFlags.SDL_WINDOW_RESIZABLE)
         
             let renderer = SDL.SDL_CreateRenderer(window,-1,SDL.SDL_RendererFlags.SDL_RENDERER_SOFTWARE) 
             let windowSize = GetWindowSize window           
@@ -130,17 +195,43 @@ module SDL_FSH =
             let mutable yoff = 0;
             while not quit do
                 let mutable event = Unchecked.defaultof<SDL.SDL_Event>
-                while SDL.SDL_PollEvent(&event) <> 0 do
-                    if SDL.SDL_WaitEvent(&event) <> 1 then 
-                        quit <- true
-                    else         
+                while SDL.SDL_PollEvent(&event) <> 0 do                    
                         quit <- HandleEvent(event)
+
+                for controllerPair in Controllers do
+                    let controller = controllerPair.Controller
+                    let rumbler = controllerPair.Rumbler
+                    if SDL.SDL_GameControllerGetAttached(controller) = SDL.SDL_bool.SDL_TRUE then
+                        let up = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_UP) <> 0uy
+                        let down = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_DOWN) <> 0uy
+                        let left = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_LEFT) <> 0uy
+                        let right = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_RIGHT) <> 0uy
+                        let start = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_START) <> 0uy
+                        let back = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_BACK) <> 0uy
+                        let leftShoulder = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSHOULDER) <> 0uy
+                        let rightShoulder = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) <> 0uy
+                        let AButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_A) <> 0uy
+                        let BButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_B) <> 0uy
+                        let XButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_X) <> 0uy
+                        let YButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_Y) <> 0uy
+
+                        let stickX = SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTX)
+                        let stickY = SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTY)
+
+                        if AButton then yoff <- yoff + 2
+                        if BButton then
+                            if rumbler <> IntPtr.Zero then
+                                SDL.SDL_HapticRumblePlay(rumbler,0.5f,2000u) |> ignore
+
+
+
+
                 RenderWeirdGradient GlobalBackBuffer xoff yoff
                 UpdateWindow window renderer GlobalBackBuffer
-                yoff <- yoff + 2
-                xoff <- xoff + 1
+                
                 
     
 
-    
+        CloseGameControllers()
+        SDL.SDL_Quit()
         0 // return an integer exit code
