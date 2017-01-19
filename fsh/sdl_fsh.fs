@@ -22,7 +22,7 @@ module SDL_FSH =
 
     let Controllers = ResizeArray<Controller>(1)
     
-
+   
     type SDL_OffscreenBuffer = 
         {
             mutable Memory : int32[]
@@ -55,22 +55,19 @@ module SDL_FSH =
             Width = w
             Height = h
         }
-
-    let AudioCallback (userData:IntPtr) (stream:IntPtr) (len:int) =
-        ()   
-
+   
     let InitAudio (samplesPerSecond:int32) (bufferSize:uint16) =
+        
         let mutable audioSettings = SDL.SDL_AudioSpec()
         audioSettings.freq <- samplesPerSecond
         audioSettings.format <- SDL.AUDIO_S16LSB
         audioSettings.channels <- 2uy
         audioSettings.samples <- bufferSize
-        audioSettings.callback <- SDL.SDL_AudioCallback(AudioCallback)
-
+      
         let mutable obtainedAudioSettings = SDL.SDL_AudioSpec()
-        if SDL.SDL_OpenAudio(ref audioSettings,ref obtainedAudioSettings) <> 0 then
+        if SDL.SDL_OpenAudio(ref audioSettings,IntPtr.Zero) <> 0 then
             printfn "Audio Error"
-        SDL.SDL_PauseAudio(0)
+        
     
     let RenderWeirdGradient (buffer:SDL_OffscreenBuffer) (bOffset:int32) (gOffset:int32) =        
         let mutable row = 0
@@ -201,7 +198,7 @@ module SDL_FSH =
         else            
             printfn "success"
             OpenGameControllers ()
-            InitAudio 48000 4096us
+            
             let window =
                 SDL.SDL_CreateWindow("FSharp Hero",
                                      100,100,1920,1200,
@@ -213,6 +210,20 @@ module SDL_FSH =
             let mutable quit = false;
             let mutable xoff = 0;
             let mutable yoff = 0;
+
+            let samplesPerSecond = 48000
+            let toneHz = 256
+            let toneVolume = 3000s
+            let mutable runningSampleIndex = 0u
+            let SquareWavePeriod = samplesPerSecond / toneHz
+            let halfSquareWavePeriod = SquareWavePeriod / 2
+            let bytesPerSample = 4
+            
+            InitAudio 48000 (uint16(samplesPerSecond * bytesPerSample / 60))
+
+            let mutable soundIsPlaying = false
+
+
             while not quit do
                 let mutable event = Unchecked.defaultof<SDL.SDL_Event>
                 while SDL.SDL_PollEvent(&event) <> 0 do                    
@@ -244,9 +255,33 @@ module SDL_FSH =
                                 SDL.SDL_HapticRumblePlay(rumbler,0.5f,2000u) |> ignore
 
 
-
-
                 RenderWeirdGradient GlobalBackBuffer xoff yoff
+
+                let targetQueueBytes = samplesPerSecond * bytesPerSample
+                let bytesToWrite = targetQueueBytes - (int)(SDL.SDL_GetQueuedAudioSize(1u))
+                if bytesToWrite <> 0 then
+                    let sampleCount = bytesToWrite/bytesPerSample
+                    let soundBuffer = Array.zeroCreate<int16> (bytesToWrite/2)
+                    let mutable i = 0;
+                    while i <= sampleCount*2-2 do
+                        let up = ((runningSampleIndex / (uint32)halfSquareWavePeriod) % 2u) = 0u
+                        if up then
+                            soundBuffer.[i] <- toneVolume
+                            soundBuffer.[i+1] <- toneVolume
+                        else
+                            soundBuffer.[i] <- -toneVolume
+                            soundBuffer.[i+1] <- toneVolume
+                        runningSampleIndex <- (runningSampleIndex + 1u) % UInt32.MaxValue
+                        i <- i + 2
+                    let soundHandle = GCHandle.Alloc(soundBuffer,GCHandleType.Pinned)
+                    let soundPtr = soundHandle.AddrOfPinnedObject()               
+                    SDL.SDL_QueueAudio(1u,soundPtr,(uint32)bytesToWrite) |> ignore
+                    soundHandle.Free()
+
+                if not soundIsPlaying then
+                    SDL.SDL_PauseAudio(0)
+                    soundIsPlaying <- true
+
                 UpdateWindow window renderer GlobalBackBuffer
                 
                 
