@@ -6,6 +6,7 @@ module SDL_FSH =
     open System.Runtime.InteropServices
     open Microsoft.FSharp.NativeInterop
     open System
+    open System.Diagnostics
 
     type SDL_Texture = nativeint
     type SDL_Window = nativeint
@@ -257,7 +258,10 @@ module SDL_FSH =
             FillSoundBuffer soundOutput 0 (soundOutput.LatencySampleCount*soundOutput.BytesPerSample)
             SDL.SDL_PauseAudio(0)
             
+            let stopwatch = Stopwatch()
+            stopwatch.Start()
             while not quit do
+                stopwatch.Restart()
                 let mutable event = Unchecked.defaultof<SDL.SDL_Event>
                 while SDL.SDL_PollEvent(&event) <> 0 do                    
                         quit <- HandleEvent(event)
@@ -298,9 +302,9 @@ module SDL_FSH =
                 FillSoundBuffer soundOutput 0 bytesToWrite
 
                 
-                UpdateWindow window renderer GlobalBackBuffer
-                
-                
+                UpdateWindow window renderer GlobalBackBuffer                
+                stopwatch.Stop()
+                printfn "FPS:%A" (1000L/stopwatch.ElapsedMilliseconds)
     
 
         CloseGameControllers()
