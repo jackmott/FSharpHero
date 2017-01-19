@@ -13,6 +13,7 @@ module SDL_FSH =
     type SDL_GameController = nativeint
     type SDL_Haptic = nativeint
 
+    let PI32 = 3.14159265359f
     let MAX_CONTROLLERS = 4
     type Controller =
       {
@@ -22,7 +23,18 @@ module SDL_FSH =
 
     let Controllers = ResizeArray<Controller>(1)
     
-   
+    type SDL_SoundOutput =
+        {
+            SamplesPerSecond : int
+            mutable ToneHz : int
+            ToneVolume :int16
+            mutable RunningSampleIndex : uint32
+            mutable WavePeriod : int
+            BytesPerSample : int            
+            mutable TSine : float32
+            LatencySampleCount : int
+        }
+
     type SDL_OffscreenBuffer = 
         {
             mutable Memory : int32[]
@@ -31,13 +43,7 @@ module SDL_FSH =
             mutable Height : int32
             mutable Pitch : int
         }
-
-    type SDL_WindowSize =
-        {
-            Width : int
-            Height : int
-        }
-    
+       
     let GlobalBackBuffer =
         {
             Memory = Array.zeroCreate<int32> 0
@@ -45,6 +51,12 @@ module SDL_FSH =
             Width = 0
             Height = 0
             Pitch = 0
+        }
+
+    type SDL_WindowSize =
+        {
+            Width : int
+            Height : int
         }
 
     let GetWindowSize (window : SDL_Window) = 
@@ -56,6 +68,24 @@ module SDL_FSH =
             Height = h
         }
    
+
+    let FillSoundBuffer (soundOutput : SDL_SoundOutput) (byteToLock : int) (bytesToWrite : int) =
+        let sampleCount = bytesToWrite / soundOutput.BytesPerSample
+        let audioBuffer = Array.zeroCreate<int16> (bytesToWrite/2)
+        let mutable i = 0
+        while i <= sampleCount*2-2 do
+            let sineValue = Math.Sin((float)soundOutput.TSine)
+            let sampleValue = (int16)(sineValue * (float)soundOutput.ToneVolume)
+            audioBuffer.[i] <- sampleValue;
+            audioBuffer.[i+1] <- sampleValue;            
+            soundOutput.TSine <- soundOutput.TSine + 2.0f*PI32*1.0f/(float32)soundOutput.WavePeriod
+            soundOutput.RunningSampleIndex <- soundOutput.RunningSampleIndex + 1u
+            i <- i + 2
+        let soundHandle = GCHandle.Alloc(audioBuffer,GCHandleType.Pinned)
+        let soundPtr = soundHandle.AddrOfPinnedObject()               
+        SDL.SDL_QueueAudio(1u,soundPtr,(uint32)bytesToWrite) |> ignore
+        soundHandle.Free()
+
     let InitAudio (samplesPerSecond:int32) (bufferSize:uint16) =
         
         let mutable audioSettings = SDL.SDL_AudioSpec()
@@ -211,19 +241,22 @@ module SDL_FSH =
             let mutable xoff = 0;
             let mutable yoff = 0;
 
-            let samplesPerSecond = 48000
-            let toneHz = 256
-            let toneVolume = 3000s
-            let mutable runningSampleIndex = 0u
-            let SquareWavePeriod = samplesPerSecond / toneHz
-            let halfSquareWavePeriod = SquareWavePeriod / 2
-            let bytesPerSample = 4
+            let soundOutput = 
+                {
+                    SamplesPerSecond = 48000
+                    ToneHz = 256
+                    ToneVolume = 3000s
+                    RunningSampleIndex = 0u
+                    WavePeriod = 48000/256
+                    BytesPerSample = 4                    
+                    TSine = 0.0f
+                    LatencySampleCount = 48000 / 15
+                }
             
-            InitAudio 48000 (uint16(samplesPerSecond * bytesPerSample / 60))
-
-            let mutable soundIsPlaying = false
-
-
+            InitAudio soundOutput.SamplesPerSecond ((uint16)(soundOutput.SamplesPerSecond * soundOutput.BytesPerSample / 60))
+            FillSoundBuffer soundOutput 0 (soundOutput.LatencySampleCount*soundOutput.BytesPerSample)
+            SDL.SDL_PauseAudio(0)
+            
             while not quit do
                 let mutable event = Unchecked.defaultof<SDL.SDL_Event>
                 while SDL.SDL_PollEvent(&event) <> 0 do                    
@@ -249,39 +282,22 @@ module SDL_FSH =
                         let stickX = SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTX)
                         let stickY = SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTY)
 
-                        if AButton then yoff <- yoff + 2
-                        if BButton then
-                            if rumbler <> IntPtr.Zero then
-                                SDL.SDL_HapticRumblePlay(rumbler,0.5f,2000u) |> ignore
+                        xoff <- xoff + (int)stickX / 4096
+                        yoff <- yoff + (int)stickY / 4096
+
+                        soundOutput.ToneHz <- 512 + (int)(256.0f*((float32)stickY / 30000.0f))
+                        soundOutput.WavePeriod <- soundOutput.SamplesPerSecond / soundOutput.ToneHz
+
+
 
 
                 RenderWeirdGradient GlobalBackBuffer xoff yoff
 
-                let targetQueueBytes = samplesPerSecond * bytesPerSample
+                let targetQueueBytes = soundOutput.LatencySampleCount*soundOutput.BytesPerSample
                 let bytesToWrite = targetQueueBytes - (int)(SDL.SDL_GetQueuedAudioSize(1u))
-                if bytesToWrite <> 0 then
-                    let sampleCount = bytesToWrite/bytesPerSample
-                    let soundBuffer = Array.zeroCreate<int16> (bytesToWrite/2)
-                    let mutable i = 0;
-                    while i <= sampleCount*2-2 do
-                        let up = ((runningSampleIndex / (uint32)halfSquareWavePeriod) % 2u) = 0u
-                        if up then
-                            soundBuffer.[i] <- toneVolume
-                            soundBuffer.[i+1] <- toneVolume
-                        else
-                            soundBuffer.[i] <- -toneVolume
-                            soundBuffer.[i+1] <- toneVolume
-                        runningSampleIndex <- (runningSampleIndex + 1u) % UInt32.MaxValue
-                        i <- i + 2
-                    let soundHandle = GCHandle.Alloc(soundBuffer,GCHandleType.Pinned)
-                    let soundPtr = soundHandle.AddrOfPinnedObject()               
-                    SDL.SDL_QueueAudio(1u,soundPtr,(uint32)bytesToWrite) |> ignore
-                    soundHandle.Free()
+                FillSoundBuffer soundOutput 0 bytesToWrite
 
-                if not soundIsPlaying then
-                    SDL.SDL_PauseAudio(0)
-                    soundIsPlaying <- true
-
+                
                 UpdateWindow window renderer GlobalBackBuffer
                 
                 
