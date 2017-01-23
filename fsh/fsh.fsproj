@@ -48,12 +48,14 @@
     <Reference Include="System.Numerics" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="handmade.fs" />
-    <Compile Include="sdl_handmade.fs" />
     <None Include="App.config" />
     <None Include="SDL2.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <Compile Include="handmade_types.fs" />
+    <Compile Include="Utils.fs" />
+    <Compile Include="handmade.fs" />
+    <Compile Include="sdl_handmade.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\SDL2-CS\SDL2-CS.csproj">

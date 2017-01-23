@@ -1,7 +1,8 @@
 ﻿namespace FSharpHero
 
 module SDL_Handmade =
-
+    open Handmade
+    open Utils
     open SDL2
     open System.Runtime.InteropServices
     open Microsoft.FSharp.NativeInterop
@@ -14,7 +15,7 @@ module SDL_Handmade =
     type SDL_GameController = nativeint
     type SDL_Haptic = nativeint
 
-    let PI32 = 3.14159265359f
+    
     let MAX_CONTROLLERS = 4
     type Controller =
       {
@@ -22,7 +23,7 @@ module SDL_Handmade =
         Rumbler : SDL_Haptic
       }
 
-    let Controllers = ResizeArray<Controller>(1)
+    let SDLControllerHandles = ResizeArray<Controller>(1)
     
     type SDL_SoundOutput =
         {
@@ -65,7 +66,12 @@ module SDL_Handmade =
         | (w,h) -> {Width = w; Height = h }
         
 
-    let FillSoundBuffer (soundOutput : SDL_SoundOutput) (byteToLock : int) (bytesToWrite : int) =
+    let FillSoundBuffer (soundOutput : SDL_SoundOutput) (bytesToWrite:int) (soundBuffer:SoundOutputBuffer) =
+        let soundHandle = GCHandle.Alloc(soundBuffer.Samples,GCHandleType.Pinned)
+        let soundPtr = soundHandle.AddrOfPinnedObject()               
+        SDL.SDL_QueueAudio(1u,soundPtr,(uint32)bytesToWrite) |> ignore
+        soundHandle.Free()
+        (* 
         let sampleCount = bytesToWrite / soundOutput.BytesPerSample
         let audioBuffer = Array.zeroCreate<int16> (bytesToWrite/2)
         let mutable i = 0
@@ -81,6 +87,7 @@ module SDL_Handmade =
         let soundPtr = soundHandle.AddrOfPinnedObject()               
         SDL.SDL_QueueAudio(1u,soundPtr,(uint32)bytesToWrite) |> ignore
         soundHandle.Free()
+        *)
 
     let InitAudio (samplesPerSecond:int32) (bufferSize:uint16) =
         
@@ -94,19 +101,7 @@ module SDL_Handmade =
         if SDL.SDL_OpenAudio(ref audioSettings,IntPtr.Zero) <> 0 then
             printfn "Audio Error"
         
-    
-    let RenderWeirdGradient (buffer:SDL_OffscreenBuffer) (bOffset:int32) (gOffset:int32) =        
-        let mutable row = 0
-        let w = buffer.Width
-        let h = buffer.Height
-        for y in 0 .. h-1 do
-            for x in 0 .. w-1 do
-                let b = (x + bOffset) % 256
-                let g = (y + gOffset) % 256
-                buffer.Memory.[row+x] <- int32(g <<< 8 ||| b)
-            row <- row+w
-
-
+        
     let ResizeTexture (buffer : SDL_OffscreenBuffer) (renderer : SDL_Renderer) (w:int) (h:int) =        
                         
         if buffer.Texture <> IntPtr.Zero then
@@ -137,7 +132,12 @@ module SDL_Handmade =
         SDL.SDL_RenderPresent(renderer)
         pixelHandle.Free();
 
-    let HandleEvent (event:SDL.SDL_Event) =
+    let ProcessKeyPress (newState : ButtonState) (isDown :bool) =
+        Debug.Assert(newState.EndedDown <> isDown)
+        newState.EndedDown <- isDown
+        newState.HalfTransitionCount <- newState.HalfTransitionCount + 1
+
+    let HandleEvent (event:SDL.SDL_Event) (newController:ControllerInput) =
         
         match event.``type`` with
         | SDL.SDL_EventType.SDL_QUIT  
@@ -154,16 +154,16 @@ module SDL_Handmade =
                         false
                if event.key.repeat = 0uy then
                    match keyCode with
-                   | SDL.SDL_Keycode.SDLK_w -> ()
-                   | SDL.SDL_Keycode.SDLK_a -> ()
-                   | SDL.SDL_Keycode.SDLK_s -> ()
-                   | SDL.SDL_Keycode.SDLK_d -> ()
-                   | SDL.SDL_Keycode.SDLK_q -> ()
-                   | SDL.SDL_Keycode.SDLK_e -> ()
-                   | SDL.SDL_Keycode.SDLK_UP -> ()
-                   | SDL.SDL_Keycode.SDLK_LEFT -> ()
-                   | SDL.SDL_Keycode.SDLK_DOWN -> ()
-                   | SDL.SDL_Keycode.SDLK_RIGHT -> ()
+                   | SDL.SDL_Keycode.SDLK_w -> ProcessKeyPress newController.Buttons.MoveUp isDown
+                   | SDL.SDL_Keycode.SDLK_a -> ProcessKeyPress newController.Buttons.MoveLeft isDown
+                   | SDL.SDL_Keycode.SDLK_s -> ProcessKeyPress newController.Buttons.MoveDown isDown
+                   | SDL.SDL_Keycode.SDLK_d -> ProcessKeyPress newController.Buttons.MoveRight isDown
+                   | SDL.SDL_Keycode.SDLK_q -> ProcessKeyPress newController.Buttons.LeftShoulder isDown
+                   | SDL.SDL_Keycode.SDLK_e -> ProcessKeyPress newController.Buttons.RightShoulder isDown
+                   | SDL.SDL_Keycode.SDLK_UP -> ProcessKeyPress newController.Buttons.ActionUp isDown
+                   | SDL.SDL_Keycode.SDLK_LEFT -> ProcessKeyPress newController.Buttons.ActionLeft isDown
+                   | SDL.SDL_Keycode.SDLK_DOWN -> ProcessKeyPress newController.Buttons.ActionDown isDown
+                   | SDL.SDL_Keycode.SDLK_RIGHT -> ProcessKeyPress newController.Buttons.ActionRight isDown
                    | SDL.SDL_Keycode.SDLK_ESCAPE -> ()
                    | SDL.SDL_Keycode.SDLK_SPACE -> ()
                    | _ -> ()
@@ -187,30 +187,47 @@ module SDL_Handmade =
 
     let OpenGameControllers () = 
         let maxJoysticks = Math.Min(SDL.SDL_NumJoysticks(), MAX_CONTROLLERS)
+        
         for i in 0 .. maxJoysticks-1 do
             if SDL.SDL_IsGameController(i) = SDL.SDL_bool.SDL_TRUE then
                 let controller = SDL.SDL_GameControllerOpen(i)
                 let rumble = SDL.SDL_HapticOpen(i)
                 if SDL.SDL_HapticRumbleInit(rumble) <> 0 then
                     SDL.SDL_HapticClose(rumble)
-                    Controllers.Add( 
+                    SDLControllerHandles.Add( 
                         {
                             Controller = controller
                             Rumbler = IntPtr.Zero
                         })
                 else
-                    Controllers.Add(
+                    SDLControllerHandles.Add(
                         {
                             Controller = controller
                             Rumbler = rumble
                         })
 
 
+
     let CloseGameControllers () =
-        for controller in Controllers do
+        for controller in SDLControllerHandles do
             SDL.SDL_GameControllerClose(controller.Controller)
             SDL.SDL_HapticClose(controller.Rumbler)        
-            
+                
+    let ProcessGameControllerButton (oldState:ButtonState) (newState:ButtonState) (value:bool) =
+        newState.EndedDown <- value        
+        
+        if newState.EndedDown = oldState.EndedDown then
+            newState.HalfTransitionCount <- newState.HalfTransitionCount + 1
+                
+
+    let ProcessGameControllerAxisValue (value:int16) (deadZone:int16) = 
+        if value < -deadZone then
+            float32(value+deadZone) / (32768.0f-float32(deadZone))
+        else if value > deadZone then
+            float32(value-deadZone) / (32768.0f-float32(deadZone))
+        else
+            0.0f
+
     [<EntryPoint>]
     let main argv = 
         SDL.SDL_SetHint(SDL.SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING, "1") |> ignore
@@ -222,7 +239,7 @@ module SDL_Handmade =
             printfn "error on init"
         else            
             printfn "success"
-            OpenGameControllers ()
+            
             
             let window =
                 SDL.SDL_CreateWindow("FSharp Hero",
@@ -232,10 +249,18 @@ module SDL_Handmade =
             let renderer = SDL.SDL_CreateRenderer(window,-1,SDL.SDL_RendererFlags.SDL_RENDERER_SOFTWARE) 
             let windowSize = GetWindowSize window           
             ResizeTexture GlobalBackBuffer renderer windowSize.Width windowSize.Height
-            let mutable quit = false;
-            let mutable xoff = 0;
-            let mutable yoff = 0;
 
+            OpenGameControllers ()
+            let mutable newInput = {                
+                Controllers = Array.init (SDLControllerHandles.Count+1)
+                                         (fun i -> EmptyController)                                               
+            }
+            let mutable oldInput = {
+                Controllers = Array.init (SDLControllerHandles.Count+1)
+                                         (fun i -> EmptyController)                                               
+            }
+
+                        
             let soundOutput = 
                 {
                     SamplesPerSecond = 48000
@@ -249,51 +274,136 @@ module SDL_Handmade =
                 }
             
             InitAudio soundOutput.SamplesPerSecond ((uint16)(soundOutput.SamplesPerSecond * soundOutput.BytesPerSample / 60))
-            FillSoundBuffer soundOutput 0 (soundOutput.LatencySampleCount*soundOutput.BytesPerSample)
+            let samples = Array.zeroCreate<int16> (soundOutput.LatencySampleCount*(soundOutput.BytesPerSample/2))
             SDL.SDL_PauseAudio(0)
             
+
+            let mutable quit = false;
+            let mutable xoff = 0;
+            let mutable yoff = 0;
+
+
             let stopwatch = Stopwatch()
             stopwatch.Start()
             while not quit do
                 stopwatch.Restart()
+
+                let oldKeyboardController = oldInput.Controllers.[0]
+                let newKeyboardController = newInput.Controllers.[0]
+
+                newKeyboardController.Buttons <- {oldKeyboardController.Buttons with MoveUp = oldKeyboardController.Buttons.MoveUp}
+
+                
+
                 let mutable event = Unchecked.defaultof<SDL.SDL_Event>
                 while SDL.SDL_PollEvent(&event) <> 0 do                    
-                        quit <- HandleEvent(event)
+                        quit <- HandleEvent event newKeyboardController
+                
+                for i in 0 .. SDLControllerHandles.Count-1 do
+                    let controller = SDLControllerHandles.[i].Controller
+                    let rumbler = SDLControllerHandles.[i].Rumbler
 
-                for controllerPair in Controllers do
-                    let controller = controllerPair.Controller
-                    let rumbler = controllerPair.Rumbler
                     if SDL.SDL_GameControllerGetAttached(controller) = SDL.SDL_bool.SDL_TRUE then
+
+                        let oldController = oldInput.Controllers.[i+1]
+                        let newController = newInput.Controllers.[i+1]
+
                         let up = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_UP) <> 0uy
                         let down = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_DOWN) <> 0uy
                         let left = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_LEFT) <> 0uy
                         let right = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_RIGHT) <> 0uy
                         let start = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_START) <> 0uy
                         let back = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_BACK) <> 0uy
-                        let leftShoulder = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSHOULDER) <> 0uy
-                        let rightShoulder = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) <> 0uy
-                        let AButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_A) <> 0uy
-                        let BButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_B) <> 0uy
-                        let XButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_X) <> 0uy
-                        let YButton = SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_Y) <> 0uy
+                       
+                        ProcessGameControllerButton oldController.Buttons.LeftShoulder
+                                                    newController.Buttons.LeftShoulder
+                                                    (SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_LEFTSHOULDER) <> 0uy)
+                        ProcessGameControllerButton oldController.Buttons.RightShoulder
+                                                    newController.Buttons.RightShoulder
+                                                    (SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) <> 0uy)
+                        ProcessGameControllerButton oldController.Buttons.ActionDown
+                                                    newController.Buttons.ActionDown
+                                                    (SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_A) <> 0uy)
+                        ProcessGameControllerButton oldController.Buttons.ActionRight
+                                                    newController.Buttons.ActionRight
+                                                    (SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_B) <> 0uy)
+                        ProcessGameControllerButton oldController.Buttons.ActionLeft
+                                                    newController.Buttons.ActionLeft
+                                                    (SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_X) <> 0uy)
+                        ProcessGameControllerButton oldController.Buttons.ActionUp
+                                                    newController.Buttons.ActionUp
+                                                    (SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_Y) <> 0uy)
 
-                        let stickX = SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTX)
-                        let stickY = SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTY)
+                        
+                        newController.StickAverageX <- 
+                            ProcessGameControllerAxisValue
+                                (SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTX))
+                                1s
 
-                        xoff <- xoff + (int)stickX / 4096
-                        yoff <- yoff + (int)stickY / 4096
+                        newController.StickAverageY <- 
+                            ProcessGameControllerAxisValue
+                                (SDL.SDL_GameControllerGetAxis(controller,SDL.SDL_GameControllerAxis.SDL_CONTROLLER_AXIS_LEFTY))
+                                1s
 
-                        soundOutput.ToneHz <- 512 + (int)(256.0f*((float32)stickY / 30000.0f))
-                        soundOutput.WavePeriod <- soundOutput.SamplesPerSecond / soundOutput.ToneHz
+                        newController.Analog <- newController.StickAverageX <> 0.0f || newController.StickAverageY <> 0.0f
+                            
+                        if SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_UP) <> 0uy then
+                            newController.StickAverageY <- 1.0f
+                            newController.Analog <- false
 
+                        if SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_DOWN) <> 0uy then
+                            newController.StickAverageY <- -1.0f
+                            newController.Analog <- false
 
+                        if SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_LEFT) <> 0uy then
+                            newController.StickAverageX <- -1.0f
+                            newController.Analog <- false
 
+                        if SDL.SDL_GameControllerGetButton(controller,SDL.SDL_GameControllerButton.SDL_CONTROLLER_BUTTON_DPAD_RIGHT) <> 0uy then
+                            newController.StickAverageX <- 1.0f
+                            newController.Analog <- false
 
-                RenderWeirdGradient GlobalBackBuffer xoff yoff
+                        let threshold = 0.5f
 
-                let targetQueueBytes = soundOutput.LatencySampleCount*soundOutput.BytesPerSample
-                let bytesToWrite = targetQueueBytes - (int)(SDL.SDL_GetQueuedAudioSize(1u))
-                FillSoundBuffer soundOutput 0 bytesToWrite
+                        ProcessGameControllerButton oldController.Buttons.MoveLeft
+                                                    newController.Buttons.MoveLeft
+                                                    (newController.StickAverageX < -threshold)
+                        ProcessGameControllerButton oldController.Buttons.MoveRight
+                                                    newController.Buttons.MoveRight
+                                                    (newController.StickAverageX > threshold)
+                        ProcessGameControllerButton oldController.Buttons.MoveUp
+                                                    newController.Buttons.MoveUp
+                                                    (newController.StickAverageY < -threshold)
+                        ProcessGameControllerButton oldController.Buttons.MoveDown
+                                                    newController.Buttons.MoveDown
+                                                    (newController.StickAverageY > threshold)
+
+                        
+                let targetQueueBytes = soundOutput.LatencySampleCount * soundOutput.BytesPerSample
+                let bytesToWrite = targetQueueBytes - (int)(SDL.SDL_GetQueuedAudioSize((uint32)1))
+                let soundBuffer = {
+                    Samples = samples
+                    SampleCount = bytesToWrite / soundOutput.BytesPerSample
+                    SamplesPerSecond = soundOutput.SamplesPerSecond
+                }
+
+                let buffer : OffscreenBuffer = {
+                    Memory = GlobalBackBuffer.Memory          
+                    Width = GlobalBackBuffer.Width
+                    Height = GlobalBackBuffer.Height
+                    Pitch = GlobalBackBuffer.Pitch
+                }
+
+                GameUpdateAndRender newInput buffer soundBuffer
+
+                let temp = newInput
+                newInput <- oldInput
+                oldInput <- temp
+
+                FillSoundBuffer soundOutput (soundOutput.LatencySampleCount*soundOutput.BytesPerSample) soundBuffer
+                                              
+
+                
 
                 
                 UpdateWindow window renderer GlobalBackBuffer                
